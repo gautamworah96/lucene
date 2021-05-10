@@ -332,6 +332,42 @@ public class TestTaxonomyFacetCounts extends FacetTestCase {
     IOUtils.close(taxoWriter, searcher.getIndexReader(), taxoReader, dir, taxoDir);
   }
 
+  public void testFastTaxonomyFacetCountsWithMultiValues() throws Exception {
+    Directory dir = newDirectory();
+    Directory taxoDir = newDirectory();
+    DirectoryTaxonomyWriter taxoWriter =
+        new DirectoryTaxonomyWriter(taxoDir, IndexWriterConfig.OpenMode.CREATE);
+    FacetsConfig config = new FacetsConfig();
+    config.setMultiValued("a", true);
+    RandomIndexWriter writer = new RandomIndexWriter(random(), dir);
+
+    Document doc = new Document();
+    doc.add(newTextField("field", "text", Field.Store.NO));
+    doc.add(new FacetField("a", "path"));
+    doc.add(new FacetField("a", "path"));
+    doc.add(new FacetField("a", "path"));
+
+    writer.addDocument(config.build(taxoWriter, doc));
+
+    Document doc2 = new Document();
+    doc2.add(new FacetField("a", "path"));
+    writer.addDocument(config.build(taxoWriter, doc2));
+
+    // NRT open
+    IndexSearcher searcher = newSearcher(writer.getReader());
+
+    // NRT open
+    TaxonomyReader taxoReader = new DirectoryTaxonomyReader(taxoWriter);
+
+    Facets facets =
+        getAllFacets(FacetsConfig.DEFAULT_INDEX_FIELD_NAME, searcher, taxoReader, config);
+
+    assertEquals(4, facets.getSpecificValue("a", "path"));
+
+    writer.close();
+    IOUtils.close(taxoWriter, searcher.getIndexReader(), taxoReader, dir, taxoDir);
+  }
+
   public void testLabelWithDelimiter() throws Exception {
     Directory dir = newDirectory();
     Directory taxoDir = newDirectory();

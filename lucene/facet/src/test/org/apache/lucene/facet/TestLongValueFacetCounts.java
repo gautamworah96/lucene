@@ -573,6 +573,29 @@ public class TestLongValueFacetCounts extends LuceneTestCase {
     dir.close();
   }
 
+  public void testLongValues() throws Exception {
+    Directory dir = newDirectory();
+    RandomIndexWriter w = new RandomIndexWriter(random(), dir);
+    Document doc = new Document();
+    doc.add(new SortedNumericDocValuesField("field", 3));
+    doc.add(new SortedNumericDocValuesField("field", 3));
+    w.addDocument(doc);
+    IndexReader r = w.getReader();
+    w.close();
+    FacetsCollector fc = new FacetsCollector();
+    LongValueFacetCounts facetCounts = new LongValueFacetCounts("field", r);
+
+    FacetResult fr = facetCounts.getAllChildrenSortByValue();
+    for (LabelAndValue a : fr.labelValues) {
+      System.out.println("label is " + a.label);
+      System.out.println("value is " + a.value);
+    }
+    System.out.println("length of children is " + fr.childCount);
+    System.out.println("dim is " + fr.dim + "labelvalues " + fr.labelValues.toString() + " value is " + fr.value);
+    r.close();
+    dir.close();
+  }
+
   private static void assertSame(
       String desc,
       List<Map.Entry<Long, Integer>> expectedCounts,
