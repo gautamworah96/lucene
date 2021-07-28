@@ -16,6 +16,11 @@
  */
 
 // Configure Java project defaults.
+java {
+  toolchain {
+    languageVersion = JavaLanguageVersion.of(15)
+  }
+}
 
 allprojects {
   plugins.withType(JavaPlugin) {
@@ -65,14 +70,15 @@ allprojects {
         "-proc:none",  // proc:none was added because of LOG4J2-1925 / JDK-8186647
       ]
 
+      String localToolchainVersion = (String) project.findProperty("toolchainVersion");
       // enable some warnings only relevant to newer language features
-      if (rootProject.runtimeJavaVersion >= JavaVersion.VERSION_15) {
+      if (JavaLanguageVersion.of(localToolchainVersion) >= JavaVersion.VERSION_15) {
         options.compilerArgs += [
           "-Xlint:text-blocks",
         ]
       }
 
-      if (rootProject.runtimeJavaVersion >= JavaVersion.VERSION_16) {
+      if (JavaLanguageVersion.of(localToolchainVersion) >= JavaVersion.VERSION_16) {
         options.compilerArgs += [
           "-Xlint:synchronization",
         ]

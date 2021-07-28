@@ -17,7 +17,8 @@
 
 def skipReason
 
-if (rootProject.runtimeJavaVersion > JavaVersion.VERSION_15) {
+String localToolchainVersion = (String) project.findProperty("toolchainVersion");
+if (JavaLanguageVersion.of(localToolchainVersion) > JavaVersion.VERSION_15) {
   skipReason = "won't work with JDK ${rootProject.runtimeJavaVersion}"
 }
 
