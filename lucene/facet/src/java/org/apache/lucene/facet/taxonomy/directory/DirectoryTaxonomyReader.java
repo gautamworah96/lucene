@@ -62,9 +62,6 @@ public class DirectoryTaxonomyReader extends TaxonomyReader implements Accountab
 
   private static final int DEFAULT_CACHE_VALUE = 4000;
 
-  private long numCacheHits = 0;
-  private long numCacheMisses = 0;
-
   // NOTE: very coarse estimate!
   private static final int BYTES_PER_CACHE_ENTRY =
       4 * RamUsageEstimator.NUM_BYTES_OBJECT_REF
@@ -77,7 +74,6 @@ public class DirectoryTaxonomyReader extends TaxonomyReader implements Accountab
 
   // TODO: test DoubleBarrelLRUCache and consider using it instead
   private LRUHashMap<FacetLabel, Integer> ordinalCache;
-  private LRUHashMap<Integer, FacetLabel> categoryCache;
 
   private volatile TaxonomyIndexArrays taxoArrays;
 
@@ -89,7 +85,6 @@ public class DirectoryTaxonomyReader extends TaxonomyReader implements Accountab
       DirectoryReader indexReader,
       DirectoryTaxonomyWriter taxoWriter,
       LRUHashMap<FacetLabel, Integer> ordinalCache,
-      LRUHashMap<Integer, FacetLabel> categoryCache,
       TaxonomyIndexArrays taxoArrays)
       throws IOException {
     this.indexReader = indexReader;
@@ -101,10 +96,6 @@ public class DirectoryTaxonomyReader extends TaxonomyReader implements Accountab
         ordinalCache == null
             ? new LRUHashMap<FacetLabel, Integer>(DEFAULT_CACHE_VALUE)
             : ordinalCache;
-    this.categoryCache =
-        categoryCache == null
-            ? new LRUHashMap<Integer, FacetLabel>(DEFAULT_CACHE_VALUE)
-            : categoryCache;
 
     this.taxoArrays = taxoArrays != null ? new TaxonomyIndexArrays(indexReader, taxoArrays) : null;
   }
@@ -124,7 +115,6 @@ public class DirectoryTaxonomyReader extends TaxonomyReader implements Accountab
     // These are the default cache sizes; they can be configured after
     // construction with the cache's setMaxSize() method
     ordinalCache = new LRUHashMap<>(DEFAULT_CACHE_VALUE);
-    categoryCache = new LRUHashMap<>(DEFAULT_CACHE_VALUE);
   }
 
   /**
@@ -142,7 +132,6 @@ public class DirectoryTaxonomyReader extends TaxonomyReader implements Accountab
     // These are the default cache sizes; they can be configured after
     // construction with the cache's setMaxSize() method
     ordinalCache = new LRUHashMap<>(DEFAULT_CACHE_VALUE);
-    categoryCache = new LRUHashMap<>(DEFAULT_CACHE_VALUE);
   }
 
   private synchronized void initTaxoArrays() throws IOException {
@@ -161,9 +150,6 @@ public class DirectoryTaxonomyReader extends TaxonomyReader implements Accountab
     taxoArrays = null;
     // do not clear() the caches, as they may be used by other DTR instances.
     ordinalCache = null;
-    categoryCache = null;
-    System.out.println("num cache hits is " + numCacheHits);
-    System.out.println("num cache misses is " + numCacheMisses);
   }
 
   /**
@@ -215,10 +201,10 @@ public class DirectoryTaxonomyReader extends TaxonomyReader implements Accountab
       if (recreated) {
         // if recreated, do not reuse anything from this instace. the information
         // will be lazily computed by the new instance when needed.
-        newtr = new DirectoryTaxonomyReader(r2, taxoWriter, null, null, null);
+        newtr = new DirectoryTaxonomyReader(r2, taxoWriter, null, null);
       } else {
         newtr =
-            new DirectoryTaxonomyReader(r2, taxoWriter, ordinalCache, categoryCache, taxoArrays);
+            new DirectoryTaxonomyReader(r2, taxoWriter, ordinalCache, taxoArrays);
       }
 
       success = true;
@@ -330,14 +316,6 @@ public class DirectoryTaxonomyReader extends TaxonomyReader implements Accountab
     // TODO: can we use an int-based hash impl, such as IntToObjectMap,
     // wrapped as LRU?
     Integer catIDInteger = Integer.valueOf(ordinal);
-    synchronized (categoryCache) {
-      FacetLabel res = categoryCache.get(catIDInteger);
-      if (res != null) {
-        numCacheHits++;
-        return res;
-      }
-      numCacheMisses++;
-    }
 
     int readerIndex = ReaderUtil.subIndex(ordinal, indexReader.leaves());
     LeafReader leafReader = indexReader.leaves().get(readerIndex).reader();
@@ -357,10 +335,6 @@ public class DirectoryTaxonomyReader extends TaxonomyReader implements Accountab
       ret = new FacetLabel(FacetsConfig.stringToPath(values.binaryValue().utf8ToString()));
     }
 
-    synchronized (categoryCache) {
-      categoryCache.put(catIDInteger, ret);
-    }
-
     return ret;
   }
 
@@ -377,9 +351,6 @@ public class DirectoryTaxonomyReader extends TaxonomyReader implements Accountab
     if (taxoArrays != null) {
       ramBytesUsed += taxoArrays.ramBytesUsed();
     }
-    synchronized (categoryCache) {
-      ramBytesUsed += BYTES_PER_CACHE_ENTRY * categoryCache.size();
-    }
 
     synchronized (ordinalCache) {
       ramBytesUsed += BYTES_PER_CACHE_ENTRY * ordinalCache.size();
@@ -393,12 +364,6 @@ public class DirectoryTaxonomyReader extends TaxonomyReader implements Accountab
     final List<Accountable> resources = new ArrayList<>();
     if (taxoArrays != null) {
       resources.add(Accountables.namedAccountable("taxoArrays", taxoArrays));
-    }
-
-    synchronized (categoryCache) {
-      resources.add(
-          Accountables.namedAccountable(
-              "categoryCache", BYTES_PER_CACHE_ENTRY * categoryCache.size()));
     }
 
     synchronized (ordinalCache) {
@@ -421,9 +386,6 @@ public class DirectoryTaxonomyReader extends TaxonomyReader implements Accountab
    */
   public void setCacheSize(int size) {
     ensureOpen();
-    synchronized (categoryCache) {
-      categoryCache.setMaxSize(size);
-    }
     synchronized (ordinalCache) {
       ordinalCache.setMaxSize(size);
     }
