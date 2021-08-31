@@ -62,6 +62,9 @@ public class DirectoryTaxonomyReader extends TaxonomyReader implements Accountab
 
   private static final int DEFAULT_CACHE_VALUE = 4000;
 
+  private long numCacheHits = 0;
+  private long numCacheMisses = 0;
+
   // NOTE: very coarse estimate!
   private static final int BYTES_PER_CACHE_ENTRY =
       4 * RamUsageEstimator.NUM_BYTES_OBJECT_REF
@@ -159,6 +162,8 @@ public class DirectoryTaxonomyReader extends TaxonomyReader implements Accountab
     // do not clear() the caches, as they may be used by other DTR instances.
     ordinalCache = null;
     categoryCache = null;
+    System.out.println("num cache hits is " + numCacheHits);
+    System.out.println("num cache misses is " + numCacheMisses);
   }
 
   /**
@@ -328,8 +333,10 @@ public class DirectoryTaxonomyReader extends TaxonomyReader implements Accountab
     synchronized (categoryCache) {
       FacetLabel res = categoryCache.get(catIDInteger);
       if (res != null) {
+        numCacheHits++;
         return res;
       }
+      numCacheMisses++;
     }
 
     int readerIndex = ReaderUtil.subIndex(ordinal, indexReader.leaves());
