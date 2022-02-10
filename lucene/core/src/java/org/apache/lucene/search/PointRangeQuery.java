@@ -412,8 +412,9 @@ public abstract class PointRangeQuery extends Query {
       private long pointCount(
           PointValues.PointTree pointTree,
           BiFunction<byte[], byte[], Relation> nodeComparator,
-          Predicate<byte[]> leafComparator) throws IOException {
-        final int[] matchingLeafNodeCount = {0};
+          Predicate<byte[]> leafComparator)
+          throws IOException {
+        final int[] matchingNodeCount = {0};
         // create a custom IntersectVisitor that records the number of leafNodes that matched
         final IntersectVisitor visitor =
             new IntersectVisitor() {
@@ -430,7 +431,7 @@ public abstract class PointRangeQuery extends Query {
               @Override
               public void visit(int docID, byte[] packedValue) {
                 if (leafComparator.test(packedValue)) {
-                  matchingLeafNodeCount[0]++;
+                  matchingNodeCount[0]++;
                 }
               }
 
@@ -439,38 +440,46 @@ public abstract class PointRangeQuery extends Query {
                 return nodeComparator.apply(minPackedValue, maxPackedValue);
               }
             };
-        pointCount(visitor, pointTree, nodeComparator, leafComparator, matchingLeafNodeCount);
-        return matchingLeafNodeCount[0];
+        return pointCount(visitor, pointTree, nodeComparator, leafComparator, matchingNodeCount)
+            + matchingNodeCount[0];
       }
 
-      private void pointCount(IntersectVisitor visitor, PointValues.PointTree pointTree,
+      private long pointCount(
+          IntersectVisitor visitor,
+          PointValues.PointTree pointTree,
           BiFunction<byte[], byte[], Relation> nodeComparator,
-          Predicate<byte[]> leafComparator, int[] matchingLeafNodeCount) throws IOException {
-        Relation r = nodeComparator.apply(pointTree.getMinPackedValue(), pointTree.getMaxPackedValue());
+          Predicate<byte[]> leafComparator,
+          int[] matchingLeafNodeCount)
+          throws IOException {
+        Relation r =
+            nodeComparator.apply(pointTree.getMinPackedValue(), pointTree.getMaxPackedValue());
         switch (r) {
           case CELL_OUTSIDE_QUERY:
             // This cell is fully outside the query shape: return 0 as the count of its nodes
-            return;
+            return 0;
           case CELL_INSIDE_QUERY:
             // This cell is fully inside the query shape: return the size of the entire node as the
             // count
-            matchingLeafNodeCount[0]+=pointTree.size();
-            return;
+            return pointTree.size();
           case CELL_CROSSES_QUERY:
-              /*
-              The cell crosses the shape boundary, or the cell fully contains the query, so we fall
-              through and do full counting.
-              */
+            /*
+            The cell crosses the shape boundary, or the cell fully contains the query, so we fall
+            through and do full counting.
+            */
             if (pointTree.moveToChild()) {
+              int count = 0;
               do {
-                pointCount(visitor, pointTree, nodeComparator, leafComparator, matchingLeafNodeCount);
+                count +=
+                    pointCount(
+                        visitor, pointTree, nodeComparator, leafComparator, matchingLeafNodeCount);
               } while (pointTree.moveToSibling());
               pointTree.moveToParent();
-              return;
+              return count;
             } else {
               // we have reached a leaf node here.
               pointTree.visitDocValues(visitor);
-              return; // our leaf node count has been safely saved in the matchingLeafNodeCount array by the visitor
+              return 0; // our leaf node count has been safely saved in the matchingLeafNodeCount
+              // array by the visitor
             }
           default:
             throw new IllegalArgumentException("Unreachable code");
