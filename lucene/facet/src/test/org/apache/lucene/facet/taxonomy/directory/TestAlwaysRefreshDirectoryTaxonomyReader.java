@@ -18,6 +18,9 @@ package org.apache.lucene.facet.taxonomy.directory;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.time.Instant;
+import java.util.List;
+import java.util.function.Function;
 import org.apache.lucene.facet.FacetTestCase;
 import org.apache.lucene.facet.FacetsCollector;
 import org.apache.lucene.facet.FacetsConfig;
@@ -28,6 +31,8 @@ import org.apache.lucene.index.IndexWriterConfig;
 import org.apache.lucene.store.Directory;
 import org.apache.lucene.store.IOContext;
 import org.apache.lucene.util.IOUtils;
+
+import static com.carrotsearch.randomizedtesting.RandomizedTest.sleep;
 
 public class TestAlwaysRefreshDirectoryTaxonomyReader extends FacetTestCase {
 
@@ -41,15 +46,17 @@ public class TestAlwaysRefreshDirectoryTaxonomyReader extends FacetTestCase {
    * <p>It does not check whether the private taxoArrays were actually recreated or no. We are
    * (correctly) hiding away that complexity away from the user.
    */
-  public void testAlwaysRefreshDirectoryTaxonomyReader() throws IOException {
-    final Path taxoPath1 = createTempDir("dir1");
+  private <T extends Throwable> void testAlwaysRefreshDirectoryTaxonomyReader(
+      Function<Directory, DirectoryTaxonomyReader> dtrProducer, Class<T> exceptionType)
+      throws IOException {
+    final Path taxoPath1 = createTempDir(String.valueOf(Instant.now()));
     final Directory dir1 = newFSDirectory(taxoPath1);
     final DirectoryTaxonomyWriter tw1 =
         new DirectoryTaxonomyWriter(dir1, IndexWriterConfig.OpenMode.CREATE);
     tw1.addCategory(new FacetLabel("a"));
     tw1.commit(); // commit1
 
-    final Path taxoPath2 = createTempDir("commit1");
+    final Path taxoPath2 = createTempDir(String.valueOf(Instant.now()));
     final Directory commit1 = newFSDirectory(taxoPath2);
     // copy all index files from dir1
     for (String file : dir1.listAll()) {
@@ -63,11 +70,11 @@ public class TestAlwaysRefreshDirectoryTaxonomyReader extends FacetTestCase {
     final DirectoryReader dr1 = DirectoryReader.open(dir1);
     // using a DirectoryTaxonomyReader here will cause the test to fail and throw a AIOOB exception
     // in maybeRefresh()
-    final DirectoryTaxonomyReader dtr1 = new AlwaysRefreshDirectoryTaxonomyReader(dir1);
+    final DirectoryTaxonomyReader dtr1 = dtrProducer.apply(dir1);
     final SearcherTaxonomyManager mgr = new SearcherTaxonomyManager(dr1, dtr1, null);
 
     final FacetsConfig config = new FacetsConfig();
-    final SearcherTaxonomyManager.SearcherAndTaxonomy pair = mgr.acquire();
+    SearcherTaxonomyManager.SearcherAndTaxonomy pair = mgr.acquire();
     final FacetsCollector sfc = new FacetsCollector();
     /**
      * the call flow here initializes {@link DirectoryTaxonomyReader#taxoArrays}. These reused
@@ -82,14 +89,98 @@ public class TestAlwaysRefreshDirectoryTaxonomyReader extends FacetTestCase {
       dir1.deleteFile(file);
     }
 
+    while (dir1.getPendingDeletions().isEmpty() == false) {
+      // make the test more robust to the OS taking more time to actually delete files
+      sleep(10);
+    }
+
     // copy all index files from commit1
     for (String file : commit1.listAll()) {
       dir1.copyFrom(commit1, file, file, IOContext.READ);
     }
 
-    mgr.maybeRefresh();
+    if (exceptionType != null) {
+      expectThrows(exceptionType, mgr::maybeRefresh);
+    } else {
+      mgr.maybeRefresh();
+      pair = mgr.acquire();
+      assertEquals(new FacetLabel("a"), pair.taxonomyReader.getPath(1));
+      assertEquals(-1, pair.taxonomyReader.getOrdinal(new FacetLabel("b")));
+    }
+
+    mgr.release(pair);
     IOUtils.close(mgr, dtr1, dr1);
     // closing commit1 and dir1 throws exceptions because of checksum mismatches
-    IOUtils.closeWhileHandlingException(commit1, dir1);
+    IOUtils.deleteFiles(commit1, List.of(commit1.listAll()));
+    IOUtils.deleteFiles(dir1, List.of(dir1.listAll()));
+    IOUtils.close(commit1, dir1);
+  }
+
+  public void testAlwaysRefreshDirectoryTaxonomyReader() throws IOException {
+    testAlwaysRefreshDirectoryTaxonomyReader(
+        (dir) -> {
+          try {
+            return new DirectoryTaxonomyReader(dir);
+          } catch (IOException e) {
+            e.printStackTrace();
+          }
+          return null;
+        },
+        ArrayIndexOutOfBoundsException.class);
+    testAlwaysRefreshDirectoryTaxonomyReader(
+        (dir) -> {
+          try {
+            return new AlwaysRefreshDirectoryTaxonomyReader(dir);
+          } catch (IOException e) {
+            e.printStackTrace();
+          }
+          return null;
+        },
+        null);
+  }
+
+  /**
+   * A modified DirectoryTaxonomyReader that always recreates a new {@link
+   * AlwaysRefreshDirectoryTaxonomyReader} instance when {@link
+   * AlwaysRefreshDirectoryTaxonomyReader#doOpenIfChanged()} is called. This enables us to easily go
+   * forward or backward in time by re-computing the ordinal space during each refresh. This results
+   * in an always O(#facet_label) taxonomy array construction time when refresh is called.
+   */
+  private class AlwaysRefreshDirectoryTaxonomyReader extends DirectoryTaxonomyReader {
+
+    AlwaysRefreshDirectoryTaxonomyReader(Directory directory) throws IOException {
+      super(directory);
+    }
+
+    AlwaysRefreshDirectoryTaxonomyReader(DirectoryReader indexReader) throws IOException {
+      super(indexReader, null, null, null, null);
+    }
+
+    @Override
+    protected DirectoryTaxonomyReader doOpenIfChanged() throws IOException {
+      boolean success = false;
+
+      // the getInternalIndexReader() function performs the ensureOpen() check
+      final DirectoryReader reader = DirectoryReader.openIfChanged(super.getInternalIndexReader());
+      if (reader == null) {
+        return null; // no changes in the directory at all, nothing to do
+      }
+
+      try {
+        // It is important that we create an AlwaysRefreshDirectoryTaxonomyReader here and not a
+        // DirectoryTaxonomyReader.
+        // Returning a AlwaysRefreshDirectoryTaxonomyReader ensures that the recreated taxonomy
+        // reader also uses the overridden doOpenIfChanged
+        // method (that always recomputes values).
+        final AlwaysRefreshDirectoryTaxonomyReader newTaxonomyReader =
+            new AlwaysRefreshDirectoryTaxonomyReader(reader);
+        success = true;
+        return newTaxonomyReader;
+      } finally {
+        if (!success) {
+          IOUtils.closeWhileHandlingException(reader);
+        }
+      }
+    }
   }
 }
