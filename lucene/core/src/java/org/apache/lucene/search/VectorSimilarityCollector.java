@@ -24,7 +24,7 @@ import java.util.List;
  *
  * @lucene.experimental
  */
-class VectorSimilarityCollector extends AbstractKnnCollector {
+public class VectorSimilarityCollector extends AbstractKnnCollector {
   private final float traversalSimilarity, resultSimilarity;
   private float maxSimilarity;
   private final List<ScoreDoc> scoreDocList;
